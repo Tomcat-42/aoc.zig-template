@@ -4,6 +4,7 @@
 ### zig ###
 # Zig programming language
 
+.env
 .zig-cache/
 zig-out/
 build/
