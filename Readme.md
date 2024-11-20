@@ -9,8 +9,20 @@ All of this is powered by the **zig build system**.
 Clone this template repo:
 
 ```bash
-gh repo create aoc.zig --template Tomcat-42/aoc.zig-template
+gh repo create aoc.zig --template Tomcat-42/aoc.zig-template --public --clone
 ```
+
+Then Login to your [Advent of Code](https://adventofcode.com/) account to get your session
+token. You can do that by opening the browser devtools, selecting the networks tab, reloading
+the page, selecting any request and looking for the `Cookie: session=<TOKEN>` header:
+
+![image](https://github.com/user-attachments/assets/8ee0e200-1e00-451d-8309-3a18d94ed3af)
+
+Then, make it available as an env var:
+
+```bash
+AOC_SESSION_TOKEN="<TOKEN>"
+```  
 
 You can pass the command line flags `-Dyear=<year>` and `-Dday=<day>` 
 to specify the year and day you want to generate the template for 
