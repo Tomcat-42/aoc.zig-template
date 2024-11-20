@@ -3,6 +3,7 @@ const fs = std.fs;
 const mem = std.mem;
 const http = std.http;
 const builtin = @import("builtin");
+const fmt = std.fmt;
 
 const Build = std.Build;
 const LazyPath = Build.LazyPath;
@@ -20,12 +21,6 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "aoc.zig",
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
     const exe = b.addExecutable(.{
         .name = "aoc.zig",
         .root_source_file = b.path("src/main.zig"),
@@ -53,10 +48,17 @@ pub fn build(b: *Build) !void {
         "problem",
         .{
             .root_source_file = b.path(
-                try std.fmt.allocPrint(
+                try fs.path.join(
                     b.allocator,
-                    "{s}/{s}/{s}.zig",
-                    .{ SRC_DIR, YEAR, DAY },
+                    &[_][]const u8{
+                        SRC_DIR,
+                        YEAR,
+                        try fmt.allocPrint(
+                            b.allocator,
+                            "day{s}.zig",
+                            .{DAY},
+                        ),
+                    },
                 ),
             ),
         },
@@ -65,10 +67,17 @@ pub fn build(b: *Build) !void {
         "input",
         .{
             .root_source_file = b.path(
-                try std.fmt.allocPrint(
+                try fs.path.join(
                     b.allocator,
-                    "{s}/{s}/{s}",
-                    .{ INPUT_DIR, YEAR, DAY },
+                    &[_][]const u8{
+                        INPUT_DIR,
+                        YEAR,
+                        try fmt.allocPrint(
+                            b.allocator,
+                            "day{s}.txt",
+                            .{DAY},
+                        ),
+                    },
                 ),
             ),
         },
@@ -77,12 +86,14 @@ pub fn build(b: *Build) !void {
     // Setup Step:
     // - File -> ./input/{year}/{day}.txt. If not exist on disk, fetch from AoC API, save to disk, and then read.
     // - File -> ./src/{year}/{day}.zig. If not exist on disk, Create new file with template `assets/template.zig`.
-    const setup_step = b.step("setup", "Fetch inputs and create source files for the requested year and day");
+    const setup_step = b.step(
+        "setup",
+        "Fetch inputs and create source files for the requested year and day",
+    );
     setup_step.makeFn = setup;
-    lib.step.dependOn(setup_step);
     exe.step.dependOn(setup_step);
+
     // install
-    b.installArtifact(lib);
     b.installArtifact(exe);
 
     // run
@@ -95,12 +106,25 @@ pub fn build(b: *Build) !void {
     run_step.dependOn(&run_cmd.step);
 
     // test
-    const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
+    const problem_unit_tests = b.addTest(.{
+        .root_source_file = b.path(
+            try fs.path.join(
+                b.allocator,
+                &[_][]const u8{
+                    SRC_DIR,
+                    YEAR,
+                    try fmt.allocPrint(
+                        b.allocator,
+                        "day{s}.zig",
+                        .{DAY},
+                    ),
+                },
+            ),
+        ),
         .target = target,
         .optimize = optimize,
     });
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    const run_lib_unit_tests = b.addRunArtifact(problem_unit_tests);
     const exe_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -117,7 +141,7 @@ pub fn build(b: *Build) !void {
 
     // in windows, you cannot delete a running executable 😥
     if (builtin.os.tag != .windows)
-        clean_step.dependOn(&b.addRemoveDirTree(b.path("./.zig-cache")).step);
+        clean_step.dependOn(&b.addRemoveDirTree(b.path(".zig-cache")).step);
 }
 
 // TODO: Implement the actual logic for these functions
@@ -143,10 +167,17 @@ fn setup(s: *Build.Step, o: Build.Step.MakeOptions) !void {
 }
 
 fn fetchInputFileIfNotPresent(allocator: Allocator) !void {
-    const input_path = try std.fmt.allocPrint(
+    const input_path = try fs.path.join(
         allocator,
-        "{s}/{s}/{s}",
-        .{ INPUT_DIR, YEAR, DAY },
+        &[_][]const u8{
+            INPUT_DIR,
+            YEAR,
+            try fmt.allocPrint(
+                allocator,
+                "day{s}.txt",
+                .{DAY},
+            ),
+        },
     );
 
     // If file is already present, return the path
@@ -168,7 +199,7 @@ fn fetchInputFileIfNotPresent(allocator: Allocator) !void {
 
         const res = try http_client.fetch(.{
             .location = .{
-                .url = try std.fmt.allocPrint(
+                .url = try fmt.allocPrint(
                     allocator,
                     "https://adventofcode.com/{s}/day/{s}/input",
                     .{ YEAR, DAY },
@@ -178,7 +209,7 @@ fn fetchInputFileIfNotPresent(allocator: Allocator) !void {
             .extra_headers = &[_]http.Header{
                 .{
                     .name = "Cookie",
-                    .value = try std.fmt.allocPrint(
+                    .value = try fmt.allocPrint(
                         allocator,
                         "session={s}",
                         .{session_token},
@@ -204,10 +235,17 @@ fn fetchInputFileIfNotPresent(allocator: Allocator) !void {
 }
 
 fn generateSourceFileIfNotPresent(allocator: Allocator) !void {
-    const src_path = try std.fmt.allocPrint(
+    const src_path = try fs.path.join(
         allocator,
-        "{s}/{s}/{s}.zig",
-        .{ SRC_DIR, YEAR, DAY },
+        &[_][]const u8{
+            SRC_DIR,
+            YEAR,
+            try fmt.allocPrint(
+                allocator,
+                "day{s}.zig",
+                .{DAY},
+            ),
+        },
     );
 
     // If file is already present, do nothing
@@ -222,15 +260,27 @@ fn generateSourceFileIfNotPresent(allocator: Allocator) !void {
             \\allocator: mem.Allocator,
             \\
             \\pub fn part1(this: *const @This()) ?[]const u8 {
-            \\    _ = this; 
+            \\    _ = this;
             \\    return null;
             \\}
             \\
             \\pub fn part2(this: *const @This()) ?[]const u8 {
-            \\    _ = this; 
+            \\    _ = this;
             \\    return null;
             \\}
             \\
+            \\test "it should do nothing" {
+            \\    const allocator = std.testing.allocator;
+            \\    const input = "";
+            \\
+            \\    const problem: @This() = .{
+            \\        .input = input,
+            \\        .allocator = allocator,
+            \\    };
+            \\
+            \\    try std.testing.expectEqual(null, problem.part1());
+            \\    try std.testing.expectEqual(null, problem.part2());
+            \\}
         ;
         const dir = try fs.cwd().makeOpenPath(
             fs.path.dirname(src_path).?,
