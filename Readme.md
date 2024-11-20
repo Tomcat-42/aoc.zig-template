@@ -52,12 +52,12 @@ const mem = std.mem;
 input: []const u8,
 allocator: mem.Allocator,
 
-pub fn part1(this: *const @This()) ?[]const u8 {
+pub fn part1(this: *const @This()) !?i64 {
     _ = this;
     return null;
 }
 
-pub fn part2(this: *const @This()) ?[]const u8 {
+pub fn part2(this: *const @This()) !?i64 {
     _ = this;
     return null;
 }
@@ -71,8 +71,8 @@ test "it should do nothing" {
         .allocator = allocator,
     };
 
-    try std.testing.expectEqual(null, problem.part1());
-    try std.testing.expectEqual(null, problem.part2());
+    try std.testing.expectEqual(null, try problem.part1());
+    try std.testing.expectEqual(null, try problem.part2());
 }
 ```
 

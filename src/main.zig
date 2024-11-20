@@ -17,9 +17,9 @@ pub fn main() !void {
         .allocator = allocator,
     };
 
-    if (problem.part1()) |solution|
-        try stdout.print("{s}\n", .{solution});
+    if (try problem.part1()) |solution|
+        try stdout.print("{d}\n", .{solution});
 
-    if (problem.part2()) |solution|
-        try stdout.print("{s}\n", .{solution});
+    if (try problem.part2()) |solution|
+        try stdout.print("{d}\n", .{solution});
 }
