@@ -29,21 +29,25 @@ pub fn build(b: *Build) !void {
     });
 
     // Year and day comptime selection
+    const date = timestampToYearAndDay(
+        std.time.timestamp(),
+        -5, // AoC is in EST
+    );
     YEAR = b.option(
         []const u8,
         "year",
         "The year of the Advent of Code challenge",
-    ) orelse try current_year();
+    ) orelse try fmt.allocPrint(b.allocator, "{d}", .{date.year});
     DAY = b.option(
         []const u8,
         "day",
         "The day of the Advent of Code challenge",
-    ) orelse try current_day();
-    const options = b.addOptions();
-    options.addOption([]const u8, "YEAR", YEAR);
-    options.addOption([]const u8, "DAY", DAY);
-    options.addOption([]const u8, "INPUT_DIR", INPUT_DIR);
-    exe.root_module.addOptions("config", options);
+    ) orelse try fmt.allocPrint(b.allocator, "{d}", .{date.day});
+    // const options = b.addOptions();
+    // options.addOption([]const u8, "YEAR", YEAR);
+    // options.addOption([]const u8, "DAY", DAY);
+    // options.addOption([]const u8, "INPUT_DIR", INPUT_DIR);
+    // exe.root_module.addOptions("config", options);
     exe.root_module.addAnonymousImport(
         "problem",
         .{
@@ -144,15 +148,6 @@ pub fn build(b: *Build) !void {
         clean_step.dependOn(&b.addRemoveDirTree(b.path(".zig-cache")).step);
 }
 
-// TODO: Implement the actual logic for these functions
-fn current_year() ![]const u8 {
-    return "2024";
-}
-
-fn current_day() ![]const u8 {
-    return "1";
-}
-
 fn setup(s: *Build.Step, o: Build.Step.MakeOptions) !void {
     // NOTE: Might use those guys later for caching purposes.
     _ = o;
@@ -162,7 +157,21 @@ fn setup(s: *Build.Step, o: Build.Step.MakeOptions) !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    try fetchInputFileIfNotPresent(allocator);
+    fetchInputFileIfNotPresent(allocator) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => {
+            print("AOC_SESSION_TOKEN environment variable not found, you need to set it to fetch input files from AoC Server.\n", .{});
+            std.process.exit(1);
+        },
+        error.FailedToFetchInputFile => {
+            print("Failed to fetch input file from AoC Server (Has the problem already been released?).\n", .{});
+            std.process.exit(1);
+        },
+        else => {
+            print("Error: {}\n", .{err});
+            std.process.exit(1);
+        },
+    };
+
     try generateSourceFileIfNotPresent(allocator);
 }
 
@@ -219,9 +228,8 @@ fn fetchInputFileIfNotPresent(allocator: Allocator) !void {
             .response_storage = .{ .dynamic = &response },
         });
 
-        if (res.status != .ok) {
-            return error.@"Failed to fetch input file";
-        }
+        if (res.status != .ok) 
+            return error.FailedToFetchInputFile;
 
         // Save to disk
         const dir = try fs.cwd().makeOpenPath(
@@ -290,4 +298,51 @@ fn generateSourceFileIfNotPresent(allocator: Allocator) !void {
         defer file.close();
         try file.writeAll(template);
     }
+}
+
+// Zig std lib doesn't have DateTime yet, so I had to roll my own abomination.
+inline fn isLeapYear(year: i64) bool {
+    return (@mod(year, 4) == 0 and @mod(year, 100) != 0) or (@mod(year, 400) == 0);
+}
+
+fn timestampToYearAndDay(timestamp: i64, timezoneOffsetHours: i64) struct { year: i64, day: i64 } {
+    var year: i64 = 1970;
+    const secondsInNormalYear: i64 = 31536000; // 365 days
+    const secondsInLeapYear: i64 = 31622400; // 366 days
+
+    // Adjust timestamp for timezone offset
+    const adjustedTimestamp: i64 = timestamp + timezoneOffsetHours * 3600;
+
+    // Calculate the year
+    var remainingSeconds = adjustedTimestamp;
+    while (true) {
+        const secondsInYear = if (isLeapYear(year)) secondsInLeapYear else secondsInNormalYear;
+        if (remainingSeconds < secondsInYear) break;
+        remainingSeconds -= secondsInYear;
+        year += 1;
+    }
+
+    // Calculate the day of the year
+    const secondsPerDay: i64 = 24 * 60 * 60;
+    var dayOfYear = @as(i64, @divTrunc(remainingSeconds, secondsPerDay)) + 1;
+    remainingSeconds = @mod(remainingSeconds, secondsPerDay);
+
+    // Calculate the month and day of the month
+    const daysInMonth: [2][12]u8 = .{
+        // Normal year
+        .{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 },
+        // Leap year
+        .{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 },
+    };
+
+    const leapIndex: usize = if (isLeapYear(year)) 1 else 0;
+    var monthIndex: usize = 0;
+
+    while (dayOfYear > @as(i64, daysInMonth[leapIndex][monthIndex])) {
+        dayOfYear -= @as(i64, daysInMonth[leapIndex][monthIndex]);
+        monthIndex += 1;
+    }
+
+    // Return the year and day of the month
+    return .{ .year = year, .day = dayOfYear };
 }
