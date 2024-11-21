@@ -1,8 +1,28 @@
+const builtin = @import("builtin");
+comptime {
+    const required_zig = "0.14.0-dev";
+    const current_zig = builtin.zig_version;
+    const min_zig = std.SemanticVersion.parse(required_zig) catch unreachable;
+    if (current_zig.order(min_zig) == .lt) {
+        const error_message =
+            \\Sorry, it looks like your version of zig is too old. :-(
+            \\
+            \\aoc.zig requires development build {}
+            \\
+            \\Please download a development ("master") build from
+            \\
+            \\https://ziglang.org/download/
+            \\
+            \\
+        ;
+        @compileError(std.fmt.comptimePrint(error_message, .{min_zig}));
+    }
+}
+
 const std = @import("std");
 const fs = std.fs;
 const mem = std.mem;
 const http = std.http;
-const builtin = @import("builtin");
 const fmt = std.fmt;
 
 const Build = std.Build;
@@ -228,7 +248,7 @@ fn fetchInputFileIfNotPresent(allocator: Allocator) !void {
             .response_storage = .{ .dynamic = &response },
         });
 
-        if (res.status != .ok) 
+        if (res.status != .ok)
             return error.FailedToFetchInputFile;
 
         // Save to disk

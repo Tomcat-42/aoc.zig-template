@@ -1,5 +1,24 @@
-const std = @import("std");
 const builtin = @import("builtin");
+comptime {
+    const required_zig = "0.14.0-dev";
+    const current_zig = builtin.zig_version;
+    const min_zig = std.SemanticVersion.parse(required_zig) catch unreachable;
+    if (current_zig.order(min_zig) == .lt) {
+        const error_message =
+            \\Sorry, it looks like your version of zig is too old. :-(
+            \\
+            \\aoc.zig requires development build {}
+            \\
+            \\Please download a development ("master") build from
+            \\
+            \\https://ziglang.org/download/
+            \\
+            \\
+        ;
+        @compileError(std.fmt.comptimePrint(error_message, .{min_zig}));
+    }
+}
+const std = @import("std");
 const assert = std.debug.assert;
 const io = std.io;
 const fmt = std.fmt;
