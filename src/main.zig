@@ -18,8 +18,8 @@ pub fn main() !void {
     };
 
     if (try problem.part1()) |solution|
-        try stdout.print("{d}\n", .{solution});
+        try stdout.print("{any}\n", .{solution});
 
     if (try problem.part2()) |solution|
-        try stdout.print("{d}\n", .{solution});
+        try stdout.print("{any}\n", .{solution});
 }
