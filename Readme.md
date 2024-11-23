@@ -34,7 +34,7 @@ zig build --build-runner build_runner.zig -Dyear=2023 -Dday=1 --watch run
 
 You can pass `test` instead of run to run the unit tests instead:
 ```sh
-zig build --build-runner build_runner.zig -Dyear=2023 -Dday=1 --watch run
+zig build --build-runner build_runner.zig -Dyear=2023 -Dday=1 --watch test
 ```
 
 ## Details
