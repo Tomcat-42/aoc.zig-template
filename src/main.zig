@@ -18,8 +18,14 @@ pub fn main() !void {
     };
 
     if (try problem.part1()) |solution|
-        try stdout.print("{any}\n", .{solution});
+        try stdout.print(switch (@TypeOf(solution)) {
+            []const u8 => "{s}",
+            else => "{any}",
+        } ++ "\n", .{solution});
 
     if (try problem.part2()) |solution|
-        try stdout.print("{any}\n", .{solution});
+        try stdout.print(switch (@TypeOf(solution)) {
+            []const u8 => "{s}",
+            else => "{any}",
+        } ++ "\n", .{solution});
 }
