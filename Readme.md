@@ -78,6 +78,7 @@ test "it should do nothing" {
 
 You "solve" the problem by returning the solution from `part1` and `part2` function.
 The `input` field is the input data for the problem (see `build.zig` and `src/main.zig` 
-for details on how this is achieved).
+for details on how this is achieved). Note that you can return anything as the solution,
+for instance, if the solution is a string, you can return a `[]const u8` from any part.
 
 Add tests for small examples and edge cases in tests blocks at the end of the file.
