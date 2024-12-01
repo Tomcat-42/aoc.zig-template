@@ -158,6 +158,7 @@ pub fn build(b: *Build) !void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(setup_step);
 
     // clean
     const clean_step = b.step("clean", "Remove build artifacts");
