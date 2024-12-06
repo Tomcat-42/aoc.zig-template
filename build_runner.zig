@@ -430,9 +430,8 @@ pub fn main() !void {
     defer run.thread_pool.deinit();
 
     rebuild: while (true) {
-        if (clear) {
-            clearScreen();
-        }
+        if (clear) try clearScreen();
+
         runStepNames(
             gpa,
             builder,
