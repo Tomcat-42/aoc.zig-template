@@ -26,6 +26,7 @@ const http = std.http;
 const fmt = std.fmt;
 
 const Build = std.Build;
+const Module = Build.Module;
 const LazyPath = Build.LazyPath;
 const Step = Build.Step;
 const Allocator = std.mem.Allocator;
@@ -37,17 +38,6 @@ const INPUT_DIR = "input";
 const SRC_DIR = "src";
 
 pub fn build(b: *Build) !void {
-    // Targets
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-
-    const exe = b.addExecutable(.{
-        .name = "aoc.zig",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     // Year and day comptime selection
     const date = timestampToYearAndDay(
         std.time.timestamp(),
@@ -63,14 +53,35 @@ pub fn build(b: *Build) !void {
         "day",
         "The day of the Advent of Code challenge",
     ) orelse try fmt.allocPrint(b.allocator, "{d}", .{date.day});
-    // const options = b.addOptions();
-    // options.addOption([]const u8, "YEAR", YEAR);
-    // options.addOption([]const u8, "DAY", DAY);
-    // options.addOption([]const u8, "INPUT_DIR", INPUT_DIR);
-    // exe.root_module.addOptions("config", options);
-    exe.root_module.addAnonymousImport(
+
+    // Targets
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const problem_imports: []const Module.Import = &.{
+        // regex: {
+        //     const regex = b.dependency("regex", .{ .target = target, .optimize = optimize });
+        //     break :regex .{ .name = "regex", .module = regex.module("regex") };
+        // },
+        .{ .name = "util", .module = b.addModule(
+            "util",
+            .{
+                .root_source_file = b.path("src/util.zig"),
+                .target = target,
+                .optimize = optimize,
+            },
+        ) },
+    };
+    const exe = b.addExecutable(.{
+        .name = "aoc.zig",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const problem = b.addModule(
         "problem",
         .{
+            .imports = problem_imports,
             .root_source_file = b.path(
                 try fs.path.join(
                     b.allocator,
@@ -85,9 +96,11 @@ pub fn build(b: *Build) !void {
                     },
                 ),
             ),
+            .target = target,
+            .optimize = optimize,
         },
     );
-    exe.root_module.addAnonymousImport(
+    const input = b.addModule(
         "input",
         .{
             .root_source_file = b.path(
@@ -104,8 +117,13 @@ pub fn build(b: *Build) !void {
                     },
                 ),
             ),
+            .target = target,
+            .optimize = optimize,
         },
     );
+
+    exe.root_module.addImport("problem", problem);
+    exe.root_module.addImport("input", input);
 
     // Setup Step:
     // - File -> ./input/{year}/{day}.txt. If not exist on disk, fetch from AoC API, save to disk, and then read.
