@@ -82,3 +82,32 @@ for details on how this is achieved). Note that you can return anything as the s
 for instance, if the solution is a string, you can return a `[]const u8` from any part.
 
 Add tests for small examples and edge cases in tests blocks at the end of the file.
+
+## Dependencies
+
+Use the `zig fetch` command to download/save the dependencies. For example:
+
+```bash
+zig fetch --save git+https://github.com/tiehuis/zig-regex.git
+```
+
+Now, edit the `deps` array in `build.zig`:
+
+
+```zig
+    const problem_imports: []const Module.Import = &.{
+        ...
+        regex: {
+            const regex = b.dependency("regex", .{ .target = target, .optimize = optimize });
+            break :regex .{ .name = "regex", .module = regex.module("regex") };
+        },
+        ...
+    };
+```
+
+With this, you can import the dependency in your source code:
+
+```zig
+const regex = @import("regex");
+...
+```
