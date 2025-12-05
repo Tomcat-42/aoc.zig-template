@@ -1,8 +1,14 @@
+const std = @import("std");
+const fs = std.fs;
+const fmt = std.fmt;
+const Build = std.Build;
+const Step = Build.Step;
 const builtin = @import("builtin");
+
 comptime {
-    const required_zig = "0.14.0-dev";
+    const required_zig = "0.16.0-dev";
     const current_zig = builtin.zig_version;
-    const min_zig = std.SemanticVersion.parse(required_zig) catch unreachable;
+    const min_zig = std.SemanticVersion.parse(required_zig) catch @compileError("Failed to parse required zig version");
     if (current_zig.order(min_zig) == .lt) {
         const error_message =
             \\Sorry, it looks like your version of zig is too old. :-(
@@ -19,373 +25,224 @@ comptime {
     }
 }
 
-const std = @import("std");
-const fs = std.fs;
-const mem = std.mem;
-const http = std.http;
-const fmt = std.fmt;
-
-const Build = std.Build;
-const Module = Build.Module;
-const LazyPath = Build.LazyPath;
-const Step = Build.Step;
-const Allocator = std.mem.Allocator;
-const print = std.debug.print;
-
-var YEAR: []const u8 = undefined;
-var DAY: []const u8 = undefined;
-const INPUT_DIR = "input";
-const SRC_DIR = "src";
-
 pub fn build(b: *Build) !void {
-    // Year and day comptime selection
-    const date = timestampToYearAndDay(
-        std.time.timestamp(),
+    const default_year, const default_day = timestampToYearAndDay(
+        (try std.Io.Clock.now(.real, b.graph.io)).toSeconds(),
         -5, // AoC is in EST
     );
-    YEAR = b.option(
+
+    const year = b.option(
         []const u8,
         "year",
         "The year of the Advent of Code challenge",
-    ) orelse try fmt.allocPrint(b.allocator, "{d}", .{date.year});
-    DAY = b.option(
+    ) orelse try fmt.allocPrint(b.allocator, "{d}", .{default_year});
+
+    const day = b.option(
         []const u8,
         "day",
         "The day of the Advent of Code challenge",
-    ) orelse try fmt.allocPrint(b.allocator, "{d}", .{date.day});
+    ) orelse try fmt.allocPrint(b.allocator, "{d}", .{default_day});
 
-    // Targets
+    // Setup Step:
+    // - File -> ./input/{year}/{day}.txt. If not exist on disk, fetch from AoC API, save to disk.
+    // - File -> ./src/{year}/{day}.zig. If not exist on disk, create new file with template.
+    const setup = try SetupStep.create(b, year, day);
+
+    // Modules and Deps
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const problem_imports: []const Module.Import = &.{
-        // regex: {
-        //     const regex = b.dependency("regex", .{ .target = target, .optimize = optimize });
-        //     break :regex .{ .name = "regex", .module = regex.module("regex") };
-        // },
-        .{ .name = "util", .module = b.addModule(
-            "util",
-            .{
+    const problem = b.createModule(.{
+        .imports = &.{.{
+            .name = "util",
+            .module = b.createModule(.{
                 .root_source_file = b.path("src/util.zig"),
                 .target = target,
                 .optimize = optimize,
-            },
-        ) },
-    };
-    const exe = b.addExecutable(.{
-        .name = "aoc.zig",
-        .root_source_file = b.path("src/main.zig"),
+            }),
+        }},
+        .root_source_file = b.path(setup.problem_path),
         .target = target,
         .optimize = optimize,
     });
-    const problem = b.addModule(
-        "problem",
-        .{
-            .imports = problem_imports,
-            .root_source_file = b.path(
-                try fs.path.join(
-                    b.allocator,
-                    &[_][]const u8{
-                        SRC_DIR,
-                        YEAR,
-                        try fmt.allocPrint(
-                            b.allocator,
-                            "day{s}.zig",
-                            .{DAY},
-                        ),
-                    },
-                ),
-            ),
+
+    const input = b.createModule(.{
+        .root_source_file = b.path(setup.input_path),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const problem_test = b.addTest(.{
+        .root_module = problem,
+        .use_llvm = true,
+        .use_lld = true,
+    });
+
+    const problem_check = b.addLibrary(.{ .name = "problem_check", .root_module = problem });
+
+    const aoc = b.addExecutable(.{
+        .name = "aoc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/aoc.zig"),
             .target = target,
             .optimize = optimize,
-        },
-    );
-    const input = b.addModule(
-        "input",
-        .{
-            .root_source_file = b.path(
-                try fs.path.join(
-                    b.allocator,
-                    &[_][]const u8{
-                        INPUT_DIR,
-                        YEAR,
-                        try fmt.allocPrint(
-                            b.allocator,
-                            "day{s}.txt",
-                            .{DAY},
-                        ),
-                    },
-                ),
-            ),
-            .target = target,
-            .optimize = optimize,
-        },
-    );
+            .imports = &.{
+                .{ .name = "problem", .module = problem },
+                .{ .name = "input", .module = input },
+            },
+        }),
+    });
 
-    exe.root_module.addImport("problem", problem);
-    exe.root_module.addImport("input", input);
-
-    // Setup Step:
-    // - File -> ./input/{year}/{day}.txt. If not exist on disk, fetch from AoC API, save to disk, and then read.
-    // - File -> ./src/{year}/{day}.zig. If not exist on disk, Create new file with template `assets/template.zig`.
-    const setup_step = b.step(
-        "setup",
-        "Fetch inputs and create source files for the requested year and day",
-    );
-    setup_step.makeFn = setup;
-    exe.step.dependOn(setup_step);
+    // Setup
+    const setup_step = b.step("setup", "Fetch inputs and create source files for the requested year and day");
+    aoc.step.dependOn(&setup.step);
+    setup_step.dependOn(&setup.step);
 
     // install
-    b.installArtifact(exe);
+    b.installArtifact(aoc);
+    b.installArtifact(problem_test);
 
-    // run
-    const run_cmd = b.addRunArtifact(exe);
+    // Run
+    const run_cmd = b.addRunArtifact(aoc);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    if (b.args) |args| run_cmd.addArgs(args);
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // test
-    const problem_unit_tests = b.addTest(.{
-        .root_source_file = b.path(
-            try fs.path.join(
-                b.allocator,
-                &[_][]const u8{
-                    SRC_DIR,
-                    YEAR,
-                    try fmt.allocPrint(
-                        b.allocator,
-                        "day{s}.zig",
-                        .{DAY},
-                    ),
-                },
-            ),
-        ),
-        .target = target,
-        .optimize = optimize,
-    });
-    const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // Test
+    const run_problem_test = b.addRunArtifact(problem_test);
+    const test_step = b.step("test", "Run problem test");
+    problem_test.step.dependOn(&setup.step);
+    test_step.dependOn(&run_problem_test.step);
 
-    const run_lib_unit_tests = b.addRunArtifact(problem_unit_tests);
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-    const test_step = b.step("test", "Run unit tests");
-
-    problem_unit_tests.step.dependOn(setup_step);
-    exe_unit_tests.step.dependOn(setup_step);
-
-    test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_exe_unit_tests.step);
-
-    // clean
+    // Clean
     const clean_step = b.step("clean", "Remove build artifacts");
     clean_step.dependOn(&b.addRemoveDirTree(b.path(fs.path.basename(b.install_path))).step);
-
-    // in windows, you cannot delete a running executable 😥
     if (builtin.os.tag != .windows)
         clean_step.dependOn(&b.addRemoveDirTree(b.path(".zig-cache")).step);
+
+    // Check
+    const check_step = b.step("check", "Check that the build artifacts are up-to-date");
+    check_step.dependOn(&setup.step);
+    check_step.dependOn(&problem_check.step);
 }
 
-fn setup(s: *Build.Step, o: Build.Step.MakeOptions) !void {
-    // NOTE: Might use those guys later for caching purposes.
-    _ = o;
-    _ = s;
+const INPUT_DIR = "input";
+const SRC_DIR = "src";
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+const SetupStep = struct {
+    step: Step,
+    year: []const u8,
+    day: []const u8,
+    problem_path: []const u8,
+    input_path: []const u8,
 
-    fetchInputFileIfNotPresent(allocator) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => {
-            print("AOC_SESSION_TOKEN environment variable not found, you need to set it to fetch input files from AoC Server.\n", .{});
-            std.process.exit(1);
-        },
-        error.FailedToFetchInputFile => {
-            print("Failed to fetch input file from AoC Server (Has the problem already been released?).\n", .{});
-            std.process.exit(1);
-        },
-        else => {
-            print("Error: {}\n", .{err});
-            std.process.exit(1);
-        },
-    };
+    const TEMPLATE =
+        \\const std = @import("std");
+        \\const Allocator = std.mem.Allocator;
+        \\const Io = std.Io;
+        \\
+        \\pub fn part1(io: Io, allocator: Allocator, input: []const u8) !?i64 {
+        \\    _ = .{ io, allocator, input };
+        \\    return null;
+        \\}
+        \\
+        \\pub fn part2(io: Io, allocator: Allocator, input: []const u8) !?i64 {
+        \\    _ = .{ io, allocator, input };
+        \\    return null;
+        \\}
+        \\
+        \\test "it should do nothing" {
+        \\    const io = std.testing.io;
+        \\    const allocator = std.testing.allocator;
+        \\    const input =
+        \\        \\
+        \\    ;
+        \\
+        \\    try std.testing.expectEqual(null, try part1(io, allocator, input));
+        \\    try std.testing.expectEqual(null, try part2(io, allocator, input));
+        \\}
+    ;
 
-    try generateSourceFileIfNotPresent(allocator);
-}
-
-fn fetchInputFileIfNotPresent(allocator: Allocator) !void {
-    const input_path = try fs.path.join(
-        allocator,
-        &[_][]const u8{
-            INPUT_DIR,
-            YEAR,
-            try fmt.allocPrint(
-                allocator,
-                "day{s}.txt",
-                .{DAY},
-            ),
-        },
-    );
-
-    // If file is already present, return the path
-    if (fs.cwd().access(input_path, .{})) |_| {
-        return;
-    } else |_| { // Else, fetch from AoC API, save to disk, and then return the path
-        const session_token = try std.process.getEnvVarOwned(
-            allocator,
-            "AOC_SESSION_TOKEN",
-        );
-
-        var http_client = http.Client{
-            .allocator = allocator,
-        };
-        defer http_client.deinit();
-
-        var response = std.ArrayList(u8).init(allocator);
-        defer response.deinit();
-
-        const res = try http_client.fetch(.{
-            .location = .{
-                .url = try fmt.allocPrint(
-                    allocator,
-                    "https://adventofcode.com/{s}/day/{s}/input",
-                    .{ YEAR, DAY },
-                ),
-            },
-            .method = .GET,
-            .extra_headers = &[_]http.Header{
-                .{
-                    .name = "Cookie",
-                    .value = try fmt.allocPrint(
-                        allocator,
-                        "session={s}",
-                        .{session_token},
-                    ),
-                },
-            },
-            .response_storage = .{ .dynamic = &response },
+    pub fn create(b: *Build, year: []const u8, day: []const u8) !*SetupStep {
+        const problem_path = try fs.path.join(b.allocator, &.{
+            SRC_DIR,
+            year,
+            try fmt.allocPrint(b.allocator, "day{s}.zig", .{day}),
         });
 
-        if (res.status != .ok)
-            return error.FailedToFetchInputFile;
+        const input_path = try fs.path.join(b.allocator, &.{
+            INPUT_DIR,
+            year,
+            try fmt.allocPrint(b.allocator, "day{s}.txt", .{day}),
+        });
 
-        // Save to disk
-        const dir = try fs.cwd().makeOpenPath(
-            fs.path.dirname(input_path).?,
-            .{},
-        );
-        const file = try dir.createFile(fs.path.basename(input_path), .{});
-        defer file.close();
-        try file.writeAll(response.items);
+        const fetch = b.addExecutable(.{
+            .name = "fetch",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/fetch.zig"),
+                .target = b.graph.host,
+            }),
+        });
+        const run_fetch = b.addRunArtifact(fetch);
+        run_fetch.addArgs(&.{ year, day, input_path });
+
+        const self = b.allocator.create(SetupStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = .custom,
+                .name = "setup",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .year = year,
+            .day = day,
+            .problem_path = problem_path,
+            .input_path = input_path,
+        };
+        self.step.dependOn(&run_fetch.step);
+        return self;
     }
-}
 
-fn generateSourceFileIfNotPresent(allocator: Allocator) !void {
-    const src_path = try fs.path.join(
-        allocator,
-        &[_][]const u8{
-            SRC_DIR,
-            YEAR,
-            try fmt.allocPrint(
-                allocator,
-                "day{s}.zig",
-                .{DAY},
-            ),
-        },
-    );
-
-    // If file is already present, do nothing
-    if (fs.cwd().access(src_path, .{})) |_| {
-        return;
-    } else |_| { // Else, create new file with template
-        const template =
-            \\const std = @import("std");
-            \\const mem = std.mem;
-            \\
-            \\input: []const u8,
-            \\allocator: mem.Allocator,
-            \\
-            \\pub fn part1(this: *const @This()) !?i64 {
-            \\    _ = this;
-            \\    return null;
-            \\}
-            \\
-            \\pub fn part2(this: *const @This()) !?i64 {
-            \\    _ = this;
-            \\    return null;
-            \\}
-            \\
-            \\test "it should do nothing" {
-            \\    const allocator = std.testing.allocator;
-            \\    const input = "";
-            \\
-            \\    const problem: @This() = .{
-            \\        .input = input,
-            \\        .allocator = allocator,
-            \\    };
-            \\
-            \\    try std.testing.expectEqual(null, try problem.part1());
-            \\    try std.testing.expectEqual(null, try problem.part2());
-            \\}
-        ;
-        const dir = try fs.cwd().makeOpenPath(
-            fs.path.dirname(src_path).?,
-            .{},
-        );
-        const file = try dir.createFile(fs.path.basename(src_path), .{});
-        defer file.close();
-        try file.writeAll(template);
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *SetupStep = @fieldParentPtr("step", step);
+        try self.generateSourceFileIfNotPresent();
     }
-}
 
-// Zig std lib doesn't have DateTime yet, so I had to roll my own abomination.
-inline fn isLeapYear(year: i64) bool {
-    return (@mod(year, 4) == 0 and @mod(year, 100) != 0) or (@mod(year, 400) == 0);
-}
+    fn generateSourceFileIfNotPresent(self: *SetupStep) !void {
+        fs.cwd().access(self.problem_path, .{}) catch {
+            const dir = try fs.cwd().makeOpenPath(fs.path.dirname(self.problem_path).?, .{});
+            const file = try dir.createFile(fs.path.basename(self.problem_path), .{});
+            defer file.close();
+            try file.writeAll(TEMPLATE);
+        };
+    }
+};
 
-fn timestampToYearAndDay(timestamp: i64, timezoneOffsetHours: i64) struct { year: i64, day: i64 } {
+fn timestampToYearAndDay(timestamp: i64, tz_offset_hours: i64) struct { i64, i64 } {
+    const secs_per_day = 86400;
+    const days_in_month = [12]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+    var days = @divFloor(timestamp + tz_offset_hours * 3600, secs_per_day);
     var year: i64 = 1970;
-    const secondsInNormalYear: i64 = 31536000; // 365 days
-    const secondsInLeapYear: i64 = 31622400; // 366 days
 
-    // Adjust timestamp for timezone offset
-    const adjustedTimestamp: i64 = timestamp + timezoneOffsetHours * 3600;
-
-    // Calculate the year
-    var remainingSeconds = adjustedTimestamp;
-    while (true) {
-        const secondsInYear = if (isLeapYear(year)) secondsInLeapYear else secondsInNormalYear;
-        if (remainingSeconds < secondsInYear) break;
-        remainingSeconds -= secondsInYear;
-        year += 1;
+    while (true) : (year += 1) {
+        const days_in_year: i64 = if (isLeapYear(year)) 366 else 365;
+        if (days < days_in_year) break;
+        days -= days_in_year;
     }
 
-    // Calculate the day of the year
-    const secondsPerDay: i64 = 24 * 60 * 60;
-    var dayOfYear = @as(i64, @divTrunc(remainingSeconds, secondsPerDay)) + 1;
-    remainingSeconds = @mod(remainingSeconds, secondsPerDay);
-
-    // Calculate the month and day of the month
-    const daysInMonth: [2][12]u8 = .{
-        // Normal year
-        .{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 },
-        // Leap year
-        .{ 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 },
-    };
-
-    const leapIndex: usize = if (isLeapYear(year)) 1 else 0;
-    var monthIndex: usize = 0;
-
-    while (dayOfYear > @as(i64, daysInMonth[leapIndex][monthIndex])) {
-        dayOfYear -= @as(i64, daysInMonth[leapIndex][monthIndex]);
-        monthIndex += 1;
+    var day_of_month = days + 1;
+    for (days_in_month, 0..) |days_in_m, month| {
+        const dim: i64 = days_in_m + @intFromBool(month == 1 and isLeapYear(year));
+        if (day_of_month <= dim) break;
+        day_of_month -= dim;
     }
 
-    // Return the year and day of the month
-    return .{ .year = year, .day = dayOfYear };
+    return .{ year, day_of_month };
+}
+
+fn isLeapYear(year: i64) bool {
+    const y: u64 = @intCast(year);
+    return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0);
 }
