@@ -152,7 +152,7 @@ const SetupStep = struct {
         \\    return null;
         \\}
         \\
-        \\test "it should do nothing" {
+        \\test "problem" {
         \\    const io = std.testing.io;
         \\    const allocator = std.testing.allocator;
         \\    const input =
